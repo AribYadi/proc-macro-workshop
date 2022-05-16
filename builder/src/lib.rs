@@ -38,6 +38,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
     }
 
     impl #builder_ident {
+      pub fn build(&mut self) -> Result<#input_ident, Box<dyn std::error::Error>> {
+        Ok(#input_ident {
+          #(
+            #input_field_idents: self.#input_field_idents.clone().ok_or(format!("`{}` is not set!", stringify!(#input_field_idents)))?
+          ),*
+        })
+      }
+
       #(
         pub fn #input_field_idents(&mut self, #input_field_idents: #input_field_types) -> &mut Self {
           self.#input_field_idents = Some(#input_field_idents);
