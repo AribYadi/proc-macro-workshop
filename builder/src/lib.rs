@@ -16,6 +16,9 @@ pub fn derive(input: TokenStream) -> TokenStream {
   };
   let input_field_idents =
     input_fields.named.iter().map(|field| field.ident.as_ref().unwrap()).collect::<Vec<_>>();
+  let input_field_types =
+    input_fields.named.iter().map(|field| field.ty.clone()).collect::<Vec<_>>();
+
   let builder_ident = format_ident!("{}Builder", input_ident);
   let builder_fields = get_builder_fields(&input_fields);
 
@@ -32,6 +35,15 @@ pub fn derive(input: TokenStream) -> TokenStream {
           ),*
         }
       }
+    }
+
+    impl #builder_ident {
+      #(
+        pub fn #input_field_idents(&mut self, #input_field_idents: #input_field_types) -> &mut Self {
+          self.#input_field_idents = Some(#input_field_idents);
+          self
+        }
+      )*
     }
   }
   .into()
