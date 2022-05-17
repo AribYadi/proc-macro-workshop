@@ -75,7 +75,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
       } else {
         quote! {
-           = Some
+           = std::option::Option::Some
         }
       }
     })
@@ -90,14 +90,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
       pub fn builder() -> #builder_ident {
         #builder_ident {
           #(
-            #input_field_idents: Default::default()
+            #input_field_idents: std::default::Default::default()
           ),*
         }
       }
     }
 
     impl #builder_ident {
-      pub fn build(&mut self) -> Result<#input_ident, Box<dyn std::error::Error>> {
+      pub fn build(&mut self) -> std::result::Result<#input_ident, std::boxed::Box<dyn std::error::Error>> {
         Ok(#input_ident {
           #(
             #input_field_idents: self.#input_field_idents.clone()#builder_build_into
@@ -127,7 +127,7 @@ fn get_builder_fields(input_fields: &syn::FieldsNamed) -> quote::__private::Toke
       if is_option(&ty) || has_builder_attr(field) {
         quote! { #ty }
       } else {
-        quote! { Option<#ty> }
+        quote! { std::option::Option<#ty> }
       }
     })
     .collect::<Vec<_>>();
