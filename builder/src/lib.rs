@@ -5,7 +5,7 @@ use quote::{
 };
 use syn::parse_macro_input;
 
-#[proc_macro_derive(Builder)]
+#[proc_macro_derive(Builder, attributes(builder))]
 pub fn derive(input: TokenStream) -> TokenStream {
   let input = parse_macro_input!(input as syn::DeriveInput);
 
@@ -19,7 +19,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
   let input_field_types = input_fields
     .named
     .iter()
-    .map(|field| if is_option(&field.ty) { get_option_type(&field.ty) } else { field.ty.clone() })
+    .map(|field| {
+      if is_option(&field.ty) || has_builder_attr(field) {
+        get_inner_type(field)
+      } else {
+        field.ty.clone()
+      }
+    })
     .collect::<Vec<_>>();
 
   let builder_ident = format_ident!("{}Builder", input_ident);
@@ -28,12 +34,49 @@ pub fn derive(input: TokenStream) -> TokenStream {
     .named
     .iter()
     .map(|field| {
-      if is_option(&field.ty) {
+      if is_option(&field.ty) || has_builder_attr(field) {
         quote! {}
       } else {
         ".ok_or(format!(\"`{}` is not set!\", stringify!(#input_field_idents)))?"
           .parse::<syn::__private::TokenStream2>()
           .unwrap()
+      }
+    })
+    .collect::<Vec<_>>();
+
+  let mut errored = None;
+  let field_fn_idents = input_fields
+    .named
+    .iter()
+    .map(|field| {
+      if has_builder_attr(field) {
+        match get_builder_attr_each(&field.attrs) {
+          Ok(a) => format_ident!("{}", a),
+          Err(e) => {
+            errored = Some(quote! { #e });
+            format_ident!("_")
+          },
+        }
+      } else {
+        field.ident.clone().unwrap()
+      }
+    })
+    .collect::<Vec<_>>();
+  if let Some(e) = errored {
+    return e.into();
+  }
+  let builder_set_field = input_fields
+    .named
+    .iter()
+    .map(|field| {
+      if has_builder_attr(field) {
+        quote! {
+          .push
+        }
+      } else {
+        quote! {
+           = Some
+        }
       }
     })
     .collect::<Vec<_>>();
@@ -47,7 +90,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
       pub fn builder() -> #builder_ident {
         #builder_ident {
           #(
-            #input_field_idents: None
+            #input_field_idents: Default::default()
           ),*
         }
       }
@@ -63,8 +106,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
       }
 
       #(
-        pub fn #input_field_idents(&mut self, #input_field_idents: #input_field_types) -> &mut Self {
-          self.#input_field_idents = Some(#input_field_idents);
+        pub fn #field_fn_idents(&mut self, #field_fn_idents: #input_field_types) -> &mut Self {
+          self.#input_field_idents #builder_set_field(#field_fn_idents);
           self
         }
       )*
@@ -81,7 +124,7 @@ fn get_builder_fields(input_fields: &syn::FieldsNamed) -> quote::__private::Toke
     .iter()
     .map(|field| {
       let ty = field.ty.clone();
-      if is_option(&ty) {
+      if is_option(&ty) || has_builder_attr(field) {
         quote! { #ty }
       } else {
         quote! { Option<#ty> }
@@ -98,15 +141,25 @@ fn get_builder_fields(input_fields: &syn::FieldsNamed) -> quote::__private::Toke
 fn is_option(ty: &syn::Type) -> bool {
   match ty {
     syn::Type::Path(syn::TypePath { path: syn::Path { segments, .. }, .. }) => {
-      segments.len() == 1 && segments[0].ident == "Option"
+      segments.iter().any(|segment| segment.ident == "Option")
     },
     _ => false,
   }
 }
 
-fn get_option_type(ty: &syn::Type) -> syn::Type {
-  if !is_option(ty) {
-    unreachable!("`get_option_type` has been called with an argument of not type `Option`");
+fn is_vec(ty: &syn::Type) -> bool {
+  match ty {
+    syn::Type::Path(syn::TypePath { path: syn::Path { segments, .. }, .. }) => {
+      segments.iter().any(|segment| segment.ident == "Vec")
+    },
+    _ => false,
+  }
+}
+
+fn get_inner_type(field: &syn::Field) -> syn::Type {
+  let ty = &field.ty;
+  if !(is_option(ty) || has_builder_attr(field)) {
+    unreachable!("`get_inner_type` has been called with an argument of not type `Option` || `Vec with 'builder' attribute`");
   }
   match ty {
     syn::Type::Path(syn::TypePath { path: syn::Path { segments, .. }, .. }) => {
@@ -122,5 +175,38 @@ fn get_option_type(ty: &syn::Type) -> syn::Type {
       }
     },
     _ => unreachable!(),
+  }
+}
+
+fn has_builder_attr(field: &syn::Field) -> bool {
+  let attrs = &field.attrs;
+  is_vec(&field.ty) && attrs.iter().any(|attr| attr.path.is_ident("builder"))
+}
+
+fn get_builder_attr_each(attrs: &[syn::Attribute]) -> Result<String, syn::__private::TokenStream2> {
+  match attrs.first() {
+    Some(attr) => {
+      if !attr.path.is_ident("builder") {
+        return Err(quote! { compile_fail!("expected `builder(each = '...')`") });
+      }
+
+      match attr.parse_meta() {
+        Ok(syn::Meta::List(syn::MetaList { nested, .. })) => match nested.first() {
+          Some(syn::NestedMeta::Meta(syn::Meta::NameValue(syn::MetaNameValue {
+            path,
+            lit: syn::Lit::Str(lit),
+            ..
+          })))
+            if path.is_ident("each") =>
+          {
+            Ok(lit.value())
+          },
+          _ => Err(quote! { compile_error!("expected `builder(each = '...')`"); }),
+        },
+        Err(e) => Err(e.to_compile_error()),
+        _ => Err(quote! { compile_error!("expected `builder(each = '...')`"); }),
+      }
+    },
+    None => Err(quote! { compile_error!("expected `builder(each = '...')`"); }),
   }
 }
