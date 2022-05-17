@@ -184,29 +184,31 @@ fn has_builder_attr(field: &syn::Field) -> bool {
 }
 
 fn get_builder_attr_each(attrs: &[syn::Attribute]) -> Result<String, syn::__private::TokenStream2> {
-  match attrs.first() {
-    Some(attr) => {
-      if !attr.path.is_ident("builder") {
-        return Err(quote! { compile_fail!("expected `builder(each = '...')`") });
-      }
+  let attr = attrs.iter().find(|attr| attr.path.is_ident("builder")).ok_or_else(|| {
+    syn::Error::new(syn::__private::Span::call_site(), "`builder` attribute must be present")
+      .into_compile_error()
+  })?;
 
-      match attr.parse_meta() {
-        Ok(syn::Meta::List(syn::MetaList { nested, .. })) => match nested.first() {
-          Some(syn::NestedMeta::Meta(syn::Meta::NameValue(syn::MetaNameValue {
-            path,
-            lit: syn::Lit::Str(lit),
-            ..
-          })))
-            if path.is_ident("each") =>
-          {
-            Ok(lit.value())
-          },
-          _ => Err(quote! { compile_error!("expected `builder(each = '...')`"); }),
+  match attr.parse_meta() {
+    Ok(meta) => match meta {
+      syn::Meta::List(ref metalist) => match metalist.nested.first() {
+        Some(syn::NestedMeta::Meta(syn::Meta::NameValue(attr)))
+          if attr.path.is_ident("each") && matches!(attr.lit, syn::Lit::Str(_)) =>
+        {
+          if let syn::Lit::Str(ref s) = attr.lit {
+            return Ok(s.value());
+          }
+
+          unreachable!();
         },
-        Err(e) => Err(e.to_compile_error()),
-        _ => Err(quote! { compile_error!("expected `builder(each = '...')`"); }),
-      }
+        _ => Err(
+          syn::Error::new_spanned(meta, "expected `builder(each = \"...\")`").into_compile_error(),
+        ),
+      },
+      _ => Err(
+        syn::Error::new_spanned(meta, "expected `builder(each = \"...\")`").into_compile_error(),
+      ),
     },
-    None => Err(quote! { compile_error!("expected `builder(each = '...')`"); }),
+    Err(e) => Err(e.into_compile_error()),
   }
 }
