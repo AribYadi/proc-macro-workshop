@@ -1,6 +1,9 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::parse_macro_input;
+use syn::{
+  parse_macro_input,
+  parse_quote,
+};
 
 #[proc_macro_derive(CustomDebug, attributes(debug))]
 pub fn derive(input: TokenStream) -> TokenStream {
@@ -30,8 +33,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
     },
   };
 
+  let input_generics = add_debug_bounds(input.generics);
+  let (impl_generics, ty_generics, where_clause) = input_generics.split_for_impl();
+
   quote! {
-    impl std::fmt::Debug for #input_ident {
+    impl #impl_generics std::fmt::Debug for #input_ident #ty_generics #where_clause {
       fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(stringify!(#input_ident))
           #(.field(stringify!(#input_field_idents), &format_args!(#format_types, self.#input_field_idents)))*
@@ -44,14 +50,12 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
 fn get_format_types(
   input_fields: Vec<syn::Field>,
-) -> Result<Vec<syn::__private::TokenStream2>, syn::__private::TokenStream2> {
-  fn get_format_type(
-    field: &syn::Field,
-  ) -> Result<syn::__private::TokenStream2, syn::__private::TokenStream2> {
+) -> Result<Vec<syn::LitStr>, syn::__private::TokenStream2> {
+  fn get_format_type(field: &syn::Field) -> Result<syn::LitStr, syn::__private::TokenStream2> {
     match field.attrs.iter().find(|attr| attr.path.is_ident("debug")) {
       Some(attr) => match attr.parse_meta() {
         Ok(syn::Meta::NameValue(syn::MetaNameValue { lit, .. })) => match lit {
-          syn::Lit::Str(s) => Ok(quote! { #s }),
+          syn::Lit::Str(s) => Ok(s),
           _ => Err(
             syn::Error::new_spanned(attr.tokens.clone(), "`debug` only works with string literals")
               .into_compile_error(),
@@ -62,7 +66,7 @@ fn get_format_types(
             .into_compile_error(),
         ),
       },
-      None => Ok(quote! { "{:?}" }),
+      None => Ok(parse_quote!("{:?}")),
     }
   }
 
@@ -72,4 +76,13 @@ fn get_format_types(
     format_types.push(format_type);
   }
   Ok(format_types)
+}
+
+fn add_debug_bounds(mut generics: syn::Generics) -> syn::Generics {
+  for param in generics.params.iter_mut() {
+    if let syn::GenericParam::Type(ref mut type_param) = param {
+      type_param.bounds.push(parse_quote!(std::fmt::Debug));
+    }
+  }
+  generics
 }
