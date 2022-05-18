@@ -33,11 +33,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
     },
   };
 
-  let input_generics = add_debug_bounds(input.generics);
-  let (impl_generics, ty_generics, where_clause) = input_generics.split_for_impl();
+  let input_generics = get_generics(&input_fields, input.generics);
+  let (_, ty_generics, where_clause) = input_generics.split_for_impl();
 
   quote! {
-    impl #impl_generics std::fmt::Debug for #input_ident #ty_generics #where_clause {
+    impl #ty_generics std::fmt::Debug for #input_ident #ty_generics #where_clause {
       fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(stringify!(#input_ident))
           #(.field(stringify!(#input_field_idents), &format_args!(#format_types, self.#input_field_idents)))*
@@ -78,11 +78,61 @@ fn get_format_types(
   Ok(format_types)
 }
 
-fn add_debug_bounds(mut generics: syn::Generics) -> syn::Generics {
-  for param in generics.params.iter_mut() {
-    if let syn::GenericParam::Type(ref mut type_param) = param {
-      type_param.bounds.push(parse_quote!(std::fmt::Debug));
+fn get_generics(
+  fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
+  mut generics: syn::Generics,
+) -> syn::Generics {
+  let generic_params = generics.params.clone();
+  let where_clause = generics.make_where_clause();
+
+  for generic_ident in generic_params.iter().filter_map(|generic| match generic {
+    syn::GenericParam::Type(syn::TypeParam { ident, .. }) => Some(ident),
+    _ => None,
+  }) {
+    where_clause.predicates.push(parse_quote!(#generic_ident: std::fmt::Debug));
+  }
+
+  for field_ty in fields.iter().filter_map(|field| match field.ty {
+    syn::Type::Path(ref ty) => Some(ty.path.segments.last().unwrap()),
+    _ => None,
+  }) {
+    if field_ty.ident == "PhantomData" {
+      let field_ty_generic_ident = match field_ty.arguments {
+        syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+          ref args,
+          ..
+        }) => match args.first().unwrap() {
+          syn::GenericArgument::Type(syn::Type::Path(ty)) => ty.path.get_ident().unwrap(),
+          _ => unreachable!(),
+        },
+        _ => unreachable!(),
+      };
+
+      if let Some(bounded_ty) =
+        where_clause.predicates.iter_mut().find_map(|predicate| match predicate {
+          syn::WherePredicate::Type(syn::PredicateType { bounded_ty, .. }) => {
+            if let syn::Type::Path(syn::TypePath { ref path, .. }) = bounded_ty {
+              if path.is_ident(field_ty_generic_ident) {
+                Some(bounded_ty)
+              } else {
+                None
+              }
+            } else {
+              None
+            }
+          },
+          _ => None,
+        })
+      {
+        *bounded_ty = parse_quote!(std::marker::PhantomData<#field_ty_generic_ident>);
+        continue;
+      }
+
+      where_clause
+        .predicates
+        .push(parse_quote!(std::marker::PhantomData<#field_ty_generic_ident>: std::fmt::Debug));
     }
   }
+
   generics
 }
